@@ -1,0 +1,209 @@
+---
+title: "S16 workflow"
+output: html_notebook
+---
+This is a pipeline for processing data from 16S amplicon sequencing. The pipeline utilises ASVs and will in the analysis step use rarefaction as normalization method.
+
+Set up environment with names of files to be scanned in.
+
+```{r}
+samples <- scan("/Users/magdalenapolder/Documents/examensarbete/Burkina_faso copy/samples", what="character")
+
+forward_reads <- paste0("/Users/magdalenapolder/Documents/examensarbete/Burkina_faso copy/",samples,".R1.fastq")
+reverse_reads <- paste0("/Users/magdalenapolder/Documents/examensarbete/Burkina_faso copy/",samples,".R2.fastq")
+
+filtered_forward_reads <- paste0("/Users/magdalenapolder/Documents/examensarbete/Burkina_faso copy/",samples, "_sub_R1_filtered.fq.gz")
+filtered_reverse_reads <- paste0("/Users/magdalenapolder/Documents/examensarbete/Burkina_faso copy/",samples, "_sub_R2_filtered.fq.gz")
+```
+
+Plot Quality of reads before filtering
+```{r}
+library(dada2)
+plotQualityProfile(forward_reads)
+plotQualityProfile(reverse_reads)
+```
+
+Filter the reads.
+Obs! Make sure that there is enough overlap between the forward and resverse so it's possible to merge in later steps.
+An overlap of 20bp is good.
+Then plot the new quality after trimming.
+
+```{r}
+filtered_out <- filterAndTrim(forward_reads, filtered_forward_reads,
+                              reverse_reads, filtered_reverse_reads,
+                              maxEE=c(2,2), truncQ=2, rm.phix=TRUE, 
+                              truncLen = c(250,200))
+plotQualityProfile(filtered_forward_reads)
+plotQualityProfile(filtered_reverse_reads)
+```
+
+Generate error model, dereplicate, infer ASVs, and merge.
+```{r}
+err_forward_reads <- learnErrors(filtered_forward_reads)
+plotErrors(err_forward_reads, nominalQ=TRUE)
+
+err_reverse_reads <- learnErrors(filtered_reverse_reads)
+plotErrors(err_reverse_reads, nominalQ=TRUE)
+
+derep_forward <- derepFastq(filtered_forward_reads, verbose=TRUE)
+names(derep_forward) <- samples # the sample names in these objects are initially the file names of the samples, this sets them to the sample names for the rest of the workflow
+derep_reverse <- derepFastq(filtered_reverse_reads, verbose=TRUE)
+names(derep_reverse) <- samples
+
+dada_forward <- dada(derep_forward, err=err_forward_reads, pool="pseudo")
+dada_reverse <- dada(derep_reverse, err=err_reverse_reads, pool="pseudo")
+
+merged_amplicons <- mergePairs(dada_forward, derep_forward, dada_reverse,
+                               derep_reverse, trimOverhang=TRUE)
+```
+
+Create Sequence Table
+```{r}
+seqtab <- makeSequenceTable(merged_amplicons)
+dim(seqtab)
+
+seqtab.nochim <- removeBimeraDenovo(seqtab, verbose=T)
+sum(seqtab.nochim)/sum(seqtab)
+```
+
+Generate a read track table showing the amount of reads remaining at each step of the processing.
+Creates and writes a tab separated file.
+```{r}
+# set a little function
+getN <- function(x) sum(getUniques(x))
+
+# making a little table
+summary_tab <- data.frame(row.names=samples, dada2_input=filtered_out[,1],
+                          filtered=filtered_out[,2], dada_f=sapply(dada_forward, getN),
+                          dada_r=sapply(dada_reverse, getN), merged=sapply(merged_amplicons, getN),
+                          nonchim=rowSums(seqtab.nochim),
+                          final_perc_reads_retained=round(rowSums(seqtab.nochim)/filtered_out[,1]*100, 1))
+
+summary_tab
+
+
+write.table(summary_tab, "read-count-tracking-new.tsv", quote=FALSE, sep="\t", col.names=NA)
+```
+
+Perform taxonomy classification. First download and Load SILVA v138 reference data. Also load the DECIPHER package used for classifying.
+```{r}
+## downloading DECIPHER-formatted SILVA v138 reference
+download.file(url="http://www2.decipher.codes/Classification/TrainingSets/SILVA_SSU_r138_2019.RData", destfile="SILVA_SSU_r138_2019.RData")
+
+## loading reference taxonomy object
+load("SILVA_SSU_r138_2019.RData")
+
+library(DECIPHER)
+
+## creating DNAStringSet object of our ASVs
+dna <- DNAStringSet(getSequences(seqtab.nochim))
+
+## and classifying
+tax_info <- IdTaxa(test=dna, trainingSet=trainingSet, strand="both", processors=NULL)
+```
+
+Adjusting some of the tables and writing them out to save them.
+```{r}
+# giving our seq headers more manageable names (ASV_1, ASV_2...)
+asv_seqs <- colnames(seqtab.nochim)
+asv_headers <- vector(dim(seqtab.nochim)[2], mode="character")
+
+for (i in 1:dim(seqtab.nochim)[2]) {
+  asv_headers[i] <- paste(">ASV", i, sep="_")
+}
+
+# making and writing out a fasta of our final ASV seqs:
+asv_fasta <- c(rbind(asv_headers, asv_seqs))
+write(asv_fasta, "ASVs.fa")
+
+# count table:
+asv_tab <- t(seqtab.nochim)
+row.names(asv_tab) <- sub(">", "", asv_headers)
+write.table(asv_tab, "ASVs_counts.tsv", sep="\t", quote=F, col.names=NA)
+
+# tax table:
+# creating table of taxonomy and setting any that are unclassified as "NA"
+ranks <- c("domain", "phylum", "class", "order", "family", "genus", "species")
+asv_tax <- t(sapply(tax_info, function(x) {
+  m <- match(ranks, x$rank)
+  taxa <- x$taxon[m]
+  taxa[startsWith(taxa, "unclassified_")] <- NA
+  taxa
+}))
+colnames(asv_tax) <- ranks
+rownames(asv_tax) <- gsub(pattern=">", replacement="", x=asv_headers)
+
+write.table(asv_tax, "ASVs_taxonomy.tsv", sep = "\t", quote=F, col.names=NA)
+```
+
+Look at the spread of read length of the different ASVs. Remove any ASVs that doesn't have an assigned taxonomy on domain level.
+```{r}
+##Create histogran showing spread of ASV lengths
+library(ggplot2)
+asv_list <- as.list(asv_seqs)
+asv_length_data <- data.frame(nchar(asv_list))
+ggplot(asv_length_data, aes(x=nchar.asv_list.)) +
+  geom_histogram(binwidth=.5, colour="black", fill="white")
+
+##Remove ASVs that are "NA" on Domain level
+asv_tax_df_filtered <- data.frame(asv_tax)[!is.na(data.frame(asv_tax)$"domain"),]
+##Creates binary list of which ASVs to keep
+asv_to_keep <- !is.na(data.frame(asv_tax)$"domain")
+##Removes rows with removed ASVs
+asv_seqs_filtered <- asv_seqs[asv_to_keep]
+count_tab_filtered <- asv_tab[asv_to_keep,]
+
+asv_list_filtered <- as.list(asv_seqs_filtered)
+asv_length_data_filtered <- data.frame(nchar(asv_list_filtered))
+ggplot(asv_length_data_filtered, aes(x=nchar.asv_list_filtered.)) +
+  geom_histogram(binwidth=.5, colour="black", fill="white")
+
+```
+
+Then any unwanted samples are removed. For the Burkina Faso paper I'm removing sample VK7_25, as it only contains one single read after previous filtering steps.
+```{r}
+count_tab <- count_tab_filtered[ , c(-8,-13,-15,-26,-28,-30,-32)]
+sample_info_tab <- read.table("/Users/magdalenapolder/Documents/examensarbete/scripting/sample_info.tsv", header=T, row.names=1, check.names=F, sep="\t")[c(-8,-13,-15,-26,-28,-30,-32), ]
+sample_info_tab$color <- as.character(sample_info_tab$color)
+```
+
+Generate a rarefaction curve
+```{r}
+library(vegan)
+rarecurve(t(count_tab_filtered), step=100, col=sample_info_tab$color, lwd=2, ylab="ASVs", label=F)
+```
+
+Rarify and create phyloseq object
+```{r}
+library(phyloseq)
+
+count_rarified <- rrarefy(t(count_tab),2000)
+rare_count_phy <- otu_table(t(count_rarified), taxa_are_rows=T)
+sample_info_tab_phy <- sample_data(sample_info_tab)
+rare_physeq <- phyloseq(rare_count_phy,sample_info_tab_phy)
+```
+Plot hierarchial clustering
+```{r}
+library(dendextend)
+
+euc_dist <- dist(count_rarified)
+euc_clust <- hclust(euc_dist, method="ward.D2")
+euc_dend <- as.dendrogram(euc_clust, hang=0.1)
+dend_cols <- as.character(sample_info_tab$color[order.dendrogram(euc_dend)])
+labels_colors(euc_dend) <- dend_cols
+
+plot(euc_dend, ylab="VST Euc. dist.")
+```
+
+
+
+Create Ordination plot
+```{r}
+library(tidyverse)
+vst_pcoa <- ordinate(rare_physeq, method="NMDS", distance="bray")
+
+plot_ordination(rare_physeq, vst_pcoa, color="location", shape="type") +
+  geom_point(size=1)
+
+```
+
