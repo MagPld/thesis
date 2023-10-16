@@ -162,8 +162,8 @@ ggplot(asv_length_data_filtered, aes(x=nchar.asv_list_filtered.)) +
 
 Then any unwanted samples are removed. For the Burkina Faso paper I'm removing sample VK7_25, as it only contains one single read after previous filtering steps.
 ```{r}
-count_tab <- count_tab_filtered[ , c(-8,-13,-15,-26,-28,-30,-32)]
-sample_info_tab <- read.table("/Users/magdalenapolder/Documents/examensarbete/scripting/sample_info.tsv", header=T, row.names=1, check.names=F, sep="\t")[c(-8,-13,-15,-26,-28,-30,-32), ]
+count_tab <- count_tab_filtered[ , -28]
+sample_info_tab <- read.table("/Users/magdalenapolder/Documents/examensarbete/scripting/sample_info.tsv", header=T, row.names=1, check.names=F, sep="\t")[-28, ]
 sample_info_tab$color <- as.character(sample_info_tab$color)
 ```
 
@@ -203,7 +203,47 @@ library(tidyverse)
 vst_pcoa <- ordinate(rare_physeq, method="NMDS", distance="bray")
 
 plot_ordination(rare_physeq, vst_pcoa, color="location", shape="type") +
-  geom_point(size=1)
+  geom_point(size=1) + labs(col="location") + 
+    geom_text(aes(label=rownames(sample_info_tab), hjust=0.3, vjust=-0.4), size=3)
+
+ggsave("/Users/magdalenapolder/Documents/examensarbete/Burkina_faso copy/ordination_plots/1000/1000_4.png")
+```
+
+```{r}
+dist_matrix <- metaMDSdist(count_rarified)
+ordinate_data <- metaMDS(dist_matrix)
+
+plot_ordination(rare_physeq, ordinate_data, color="location", shape="type") +
+  geom_point(size=1) + labs(col="location") + 
+    geom_text(aes(label=rownames(sample_info_tab), hjust=0.3, vjust=-0.4), size=3)
+```
+
+Alpha diversity
+```{r}
+count_tab_phy <- otu_table(count_tab_filtered, taxa_are_rows=T)
+tax_tab <- asv_tax[!is.na(data.frame(asv_tax)$"domain"),]
+tax_tab_phy <- tax_table(tax_tab)
+
+ASV_physeq <- phyloseq(count_tab_phy, tax_tab_phy, sample_info_tab_phy)
+
+    # and now we can call the plot_richness() function on our phyloseq object
+plot_richness(ASV_physeq, color="location", measures=c("Chao1", "Shannon")) + 
+    scale_color_manual(values=unique(sample_info_tab$color[order(sample_info_tab$location)])) +
+    theme_bw() + theme(legend.title = element_blank(), axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+plot_richness(ASV_physeq, x="location", color="type", measures=c("Chao1", "Shannon")) + 
+    scale_color_manual(values=unique(sample_info_tab$color[order(sample_info_tab$location)])) +
+    theme_bw() + theme(legend.title = element_blank(), axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+
+indices <- c("shannon", "faith")
+names <- c("Shannon_diversity","Faith_diversity")
+  #calculate indices
+tse <- estimate_richness(ASV_physeq)
+tse$location <- sample_info_tab$location
+ggplot(tse, aes(x = location, y = Shannon, color = location)) + geom_boxplot()
+
+
 
 ```
 
