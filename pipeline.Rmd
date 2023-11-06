@@ -186,7 +186,7 @@ Plot hierarchial clustering
 ```{r}
 library(dendextend)
 
-euc_dist <- dist(count_rarified)
+euc_dist <- vegdist(method = "bray",count_rarified)
 euc_clust <- hclust(euc_dist, method="ward.D2")
 euc_dend <- as.dendrogram(euc_clust, hang=0.1)
 dend_cols <- as.character(sample_info_tab$color[order.dendrogram(euc_dend)])
@@ -212,6 +212,8 @@ ggsave("/Users/magdalenapolder/Documents/examensarbete/Burkina_faso copy/ordinat
 ```{r}
 dist_matrix <- metaMDSdist(count_rarified)
 ordinate_data <- metaMDS(dist_matrix)
+half_ordinate <- metaMDSiter(dist_matrix)
+
 
 plot_ordination(rare_physeq, ordinate_data, color="location", shape="type") +
   geom_point(size=1) + labs(col="location") + 
@@ -245,5 +247,45 @@ ggplot(tse, aes(x = location, y = Shannon, color = location)) + geom_boxplot()
 
 
 
+```
+
+```{r}
+ordinate_data[["dist"]]
+half_ordinate[["dist"]]
+```
+
+```{r}
+#start_time <- Sys.time()
+
+#Define Input
+count_input <- count_tab
+info_input <- sample_info_tab
+rarefaction_threshhold <- 50
+repeat_amount <- 4
+
+#Set up working files
+rarified_count <- rrarefy(t(count_input),rarefaction_threshhold)
+duplicated_info <- info_input
+
+
+for (x in 2:repeat_amount){
+  rarified_count <- rbind(rarified_count,rrarefy(t(count_input),2000))
+  duplicated_info <- rbind(duplicated_info, info_input)
+}
+
+
+rare_count_phy_repeat <- otu_table(t(rarified_count), taxa_are_rows=T)
+sample_info_tab_phy_repeat <- sample_data(duplicated_info)
+rare_physeq_repeat <- phyloseq(rare_count_phy_repeat,sample_info_tab_phy_repeat)
+
+vst_pcoa_repeat <- ordinate(rare_physeq_repeat, method="NMDS", distance="bray")
+
+plot_ordination(rare_physeq_repeat, vst_pcoa_repeat, color="location", shape="type") #+
+  #geom_point(size=1) + labs(col="location") + 
+    #geom_text(aes(label=rownames(duplicated_info), hjust=0.3, vjust=-0.4), size=3)
+
+#end_time <- Sys.time()
+#run_time <- difftime(end_time,start_time, units = "secs" )
+#time_data <- rbind(time_data,c(rarefaction_threshhold,repeat_amount,run_time))
 ```
 

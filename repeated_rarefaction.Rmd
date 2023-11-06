@@ -1,0 +1,164 @@
+---
+title: "Repeated Rarefaction Function"
+output: html_notebook
+---
+
+
+Load in neccesary data
+```{r}
+#sample_info <- read.table("sample_data.txt")
+sample_info_tab <- read.table("/Users/magdalenapolder/Documents/examensarbete/scripting/sample_info.tsv", header=T, row.names=1, check.names=F, sep="\t")[-28, ]
+sample_info_tab$color <- as.character(sample_info_tab$color)
+count_data <- read.table("ASVs_counts.tsv", header=T, row.names=1,
+             check.names=F, sep="\t")
+```
+
+Load neccesary packages
+```{r}
+library(tidyverse)
+library(phyloseq)
+library(vegan)
+```
+
+Function
+```{r}
+#Define Input
+count_input <- count_data
+info_input <- sample_info_tab
+rarefaction_threshhold <- 50
+repeat_amount <- 50
+
+
+#Set up working files
+rarified_count <- rrarefy(t(count_input),rarefaction_threshhold)
+duplicated_info <- info_input
+
+#Perform repeated rarefaction
+if (repeat_amount > 1) {
+  for (x in 2:repeat_amount){
+    rarified_count <- rbind(rarified_count,rrarefy(t(count_input),2000))
+    duplicated_info <- rbind(duplicated_info, info_input)
+    }
+  }
+
+
+
+rare_count_phy_repeat <- otu_table(t(rarified_count), taxa_are_rows=T)
+
+sample_info_tab_phy_repeat <- sample_data(duplicated_info)
+rare_physeq_repeat <- phyloseq(rare_count_phy_repeat,sample_info_tab_phy_repeat)
+
+vst_pcoa_repeat <- ordinate(rare_physeq_repeat, method="PCoA", distance="bray")
+
+plot_ordination(rare_physeq_repeat, vst_pcoa_repeat,  color = "location")
+
+coordinates <- vst_pcoa_repeat$vectors[,c(1,2)]
+sum_test <- as.data.frame(rowsum(coordinates, row.names(coordinates)))
+scale_factor <- length(coordinates)/length(t(sum_test))
+sum_test <- as.data.frame(sum_test/scale_factor)
+
+my_plot <- (plot_ordination(rare_physeq_repeat, vst_pcoa_repeat,justDF = TRUE))
+
+mean_df <- my_plot[1:length(sum_test$Axis.1),]
+mean_df[,1] <- sum_test$Axis.1
+mean_df[,2] <- sum_test$Axis.2
+
+#plot(x=sum_test[,1], y=sum_test[,2])
+
+ggplot(data = my_plot, aes(x=my_plot[,1], y=my_plot[,2],color=my_plot$location)) + labs(colour = "Location", x = "NMDS1", y ="NMDS2") + geom_point(na.rm=TRUE, shape=NA) +stat_ellipse(linetype = 1,lwd = 0.8, aes(color=my_plot$location, group=my_plot$sample_id))+geom_point(data=mean_df, mapping =aes(x=Axis.1, y=Axis.2, alpha=0, color=mean_df$location)) + geom_point(alpha = 0, na.rm=TRUE)
+
+#plot_ordination(rare_physeq_repeat, vst_pcoa_repeat,) + geom_point(shape="cross")+
+#  geom_point(data=sum_test, mapping =aes(x=MDS1, y=MDS2)) +
+#  stat_ellipse(linetype = 1,lwd = 0.8) #+
+  #geom_point(size=1) + labs(col="location") + 
+    #geom_text(aes(label=rownames(duplicated_info), hjust=0.3, vjust=-0.4), size=3)
+
+```
+
+```{r}
+repeat_raref <- function(count, info, repeats, threshold, colorb, shapeb) {
+  #Set up working files
+  rarified_count <- rrarefy(t(count),threshold)
+  duplicated_info <- info
+  
+  #Perform repeated rarefaction
+  if (repeats > 1) {
+    for (x in 2:repeats){
+      rarified_count <- rbind(rarified_count,rrarefy(t(count_input),2000))
+      duplicated_info <- rbind(duplicated_info, info)
+      }
+    }
+
+  #Convert the input into physeq objects
+  rare_count_phy_repeat <- otu_table(t(rarified_count), taxa_are_rows=T)
+  sample_info_tab_phy_repeat <- sample_data(duplicated_info)
+  rare_physeq_repeat <- phyloseq(rare_count_phy_repeat,sample_info_tab_phy_repeat)
+  
+  #Perform the Ordination calculation
+  vst_pcoa <- ordinate(rare_physeq_repeat, method="NMDS", distance="bray")
+  
+  #Create matrix with mean position for each sample
+  coordinates <- vst_pcoa$points
+  sum_test <- as.data.frame(rowsum(coordinates, row.names(coordinates)))
+  scale_factor <- length(coordinates)/length(t(sum_test))
+  sum_test <- as.data.frame(sum_test/scale_factor)
+  
+  #Convert ordination result into a data fram object
+  my_plot <- (plot_ordination(rare_physeq_repeat, vst_pcoa,justDF = TRUE))
+  
+  #Add info to mean location data frame
+  mean_df <- my_plot[1:length(sum_test$MDS1),]
+  mean_df[,1] <- sum_test$MDS1
+  mean_df[,2] <- sum_test$MDS2
+
+  #Create the plot and print it
+  finished_plot <- ggplot(data = my_plot, aes(x=my_plot[,1], y=my_plot[,2],color=my_plot$location)) + 
+    labs(colour = "Location", x = "NMDS1", y ="NMDS2") + geom_point(na.rm=TRUE, shape=NA) +
+    stat_ellipse(linetype = 1,lwd = 0.8, aes(color=my_plot$location, group=my_plot$sample_id)) +
+    geom_point(data=mean_df, mapping =aes(x=NMDS1, y=NMDS2, alpha=0, color=mean_df$location)) +
+    geom_point(alpha = 0, na.rm=TRUE)
+  
+  print(finished_plot)
+  return(vst_pcoa)
+}
+```
+
+```{r}
+complete_ordination <- repeat_raref(count_data, sample_info_tab, repeats = 20, threshold = 50, "sample_id", "location")
+
+```
+
+```{r}
+repeat_list <- c(10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 80, 90, 100, 125, 150, 175, 200)
+time_data <- matrix(ncol = 4, nrow = 0)
+colnames(time_data) <- c("Repeat Amount", "Threshold", "Time in sec", "Time in min" )
+
+
+for (x in repeat_list) {
+  print(paste("Running with ",x," repeats"))
+  time1 <- Sys.time()
+  complete_ordination <- repeat_raref(count_data, sample_info_tab, repeats = x, threshold = 1000, "sample_id", "location")
+  time2 <-Sys.time()
+  time_taken_secs <- difftime(time2, time1, units="secs")
+  time_taken_min <- difftime(time2, time1, units="mins")
+  time_data <- rbind(time_data, c(x, 1000, time_taken_secs, time_taken_min))
+}
+
+
+```
+
+```{r}
+plot(x = time_data[,1], y = time_data[,4])
+
+colnames(time_data) <- c("Repeat_Amount", "Threshold", "Time in sec", "Time_in_min" )
+time_data <- as.data.frame(time_data)
+
+ggplot(time_data,aes(x=Repeat_Amount,y=Time_in_min)) + geom_point() + xlim(0,1000) +
+stat_smooth(method="gam",fullrange=TRUE)
+
+
+ggplot(time_data,aes(x=Repeat_Amount,y=Time_in_min))+
+  geom_point()+
+  stat_smooth(method = "lm", formula = y ~ x + I(x^2), size = 1, fullrange = T)+xlim(0,1000)
+```
+
