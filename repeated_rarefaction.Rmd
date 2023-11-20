@@ -18,6 +18,7 @@ Load neccesary packages
 library(tidyverse)
 library(phyloseq)
 library(vegan)
+library(fossil)
 ```
 
 Function
@@ -26,7 +27,7 @@ Function
 count_input <- count_data
 info_input <- sample_info_tab
 rarefaction_threshhold <- 50
-repeat_amount <- 50
+repeat_amount <- 1
 
 
 #Set up working files
@@ -76,7 +77,7 @@ ggplot(data = my_plot, aes(x=my_plot[,1], y=my_plot[,2],color=my_plot$location))
 ```
 
 ```{r}
-repeat_raref <- function(count, info, repeats, threshold, colorb, shapeb) {
+repeat_raref <- function(count, info, repeats, threshold, method, colorb, shapeb, cloud = FALSE, ellipse = TRUE) {
   #Set up working files
   rarified_count <- rrarefy(t(count),threshold)
   duplicated_info <- info
@@ -95,36 +96,71 @@ repeat_raref <- function(count, info, repeats, threshold, colorb, shapeb) {
   rare_physeq_repeat <- phyloseq(rare_count_phy_repeat,sample_info_tab_phy_repeat)
   
   #Perform the Ordination calculation
-  vst_pcoa <- ordinate(rare_physeq_repeat, method="NMDS", distance="bray")
+  vst_pcoa <- ordinate(rare_physeq_repeat, method=method, distance="bray")
   
-  #Create matrix with mean position for each sample
-  coordinates <- vst_pcoa$points
-  sum_test <- as.data.frame(rowsum(coordinates, row.names(coordinates)))
-  scale_factor <- length(coordinates)/length(t(sum_test))
-  sum_test <- as.data.frame(sum_test/scale_factor)
+  if (method == "NMDS") {
+    xaxis <- "NMDS1"
+    yaxis <- "NMDS2"
+    #Create matrix with mean position for each sample
+    coordinates <- vst_pcoa$points
+    sum_test <- as.data.frame(rowsum(coordinates, row.names(coordinates)))
+    scale_factor <- length(coordinates)/length(t(sum_test))
+    sum_test <- as.data.frame(sum_test/scale_factor)
   
-  #Convert ordination result into a data fram object
-  my_plot <- (plot_ordination(rare_physeq_repeat, vst_pcoa,justDF = TRUE))
+    #Convert ordination result into a data frame object
+    my_plot <- (plot_ordination(rare_physeq_repeat, vst_pcoa,justDF = TRUE))
   
-  #Add info to mean location data frame
-  mean_df <- my_plot[1:length(sum_test$MDS1),]
-  mean_df[,1] <- sum_test$MDS1
-  mean_df[,2] <- sum_test$MDS2
-
+    #Add info to mean location data frame
+    mean_df <- my_plot[1:length(sum_test$MDS1),]
+    mean_df[,1] <- sum_test$MDS1
+    mean_df[,2] <- sum_test$MDS2
+  }
+  
+  if (method == "PCoA") {
+    xaxis <- "Axis.1"
+    yaxis <- "Axis.2"
+    #Create matrix with mean position for each sample
+    coordinates <- vst_pcoa$vectors[,c(1,2)]
+    sum_test <- as.data.frame(rowsum(coordinates, row.names(coordinates)))
+    scale_factor <- length(coordinates)/length(t(sum_test))
+    sum_test <- as.data.frame(sum_test/scale_factor)
+    
+    my_plot <- (plot_ordination(rare_physeq_repeat, vst_pcoa,justDF = TRUE))
+    
+    mean_df <- my_plot[1:length(sum_test$Axis.1),]
+    mean_df[,1] <- sum_test$Axis.1
+    mean_df[,2] <- sum_test$Axis.2
+  }
+  
+  
+  
+  color_mean <- unlist(mean_df[colorb])
+  color_tot <- unlist(my_plot[colorb])
+  
+  if (!is.na(shapeb)) {
+    shape_mean <- unlist(mean_df[shapeb])
+    shape_tot <- unlist(my_plot[shapeb])
+  }
+  
+  if (repeats <= 3 && ellipse==TRUE){
+    print("Not printing ellipse due to too few repeats. Need at least 4 repeats to calculate confidence intervals.")
+    ellipse = FALSE
+  }
+  
   #Create the plot and print it
-  finished_plot <- ggplot(data = my_plot, aes(x=my_plot[,1], y=my_plot[,2],color=my_plot$location)) + 
-    labs(colour = "Location", x = "NMDS1", y ="NMDS2") + geom_point(na.rm=TRUE, shape=NA) +
-    stat_ellipse(linetype = 1,lwd = 0.8, aes(color=my_plot$location, group=my_plot$sample_id)) +
-    geom_point(data=mean_df, mapping =aes(x=NMDS1, y=NMDS2, alpha=0, color=mean_df$location)) +
-    geom_point(alpha = 0, na.rm=TRUE)
+  finished_plot <- ggplot(data = my_plot, aes(x=my_plot[,1], y=my_plot[,2],color=color_tot, shape=shape_tot)) + 
+    labs(colour = colorb, shape = shapeb, x = xaxis, y =yaxis) + 
+    {if(cloud)geom_point(na.rm=TRUE)} +
+    {if(ellipse)stat_ellipse(linetype = 1,lwd = 0.8, aes(color=color_tot, group=my_plot$sample_id))} +
+    {if(!cloud)geom_point(data=mean_df, mapping =aes(x=mean_df[,1], y=mean_df[,2], color=color_mean, shape=shape_mean))}
   
   print(finished_plot)
-  return(vst_pcoa)
+  return(my_plot)
 }
 ```
 
 ```{r}
-complete_ordination <- repeat_raref(count_data, sample_info_tab, repeats = 20, threshold = 50, "sample_id", "location")
+complete_ordination <- repeat_raref(count_data, sample_info_tab, repeats = 10, threshold = 1000, method = "NMDS","location", "type", cloud= TRUE, ellipse=FALSE)
 
 ```
 
@@ -160,5 +196,257 @@ stat_smooth(method="gam",fullrange=TRUE)
 ggplot(time_data,aes(x=Repeat_Amount,y=Time_in_min))+
   geom_point()+
   stat_smooth(method = "lm", formula = y ~ x + I(x^2), size = 1, fullrange = T)+xlim(0,1000)
+```
+
+```{r}
+
+rarified_count <- rrarefy(t(count_input),30)
+
+
+#Convert the input into physeq objects
+rare_count_phy <- otu_table(t(rarified_count), taxa_are_rows=T)
+sample_info_tab_phy <- sample_data(duplicated_info)
+rare_physeq <- phyloseq(rare_count_phy,sample_info_tab_phy)
+  
+#Perform the Ordination calculation
+vst_pcoa <- ordinate(rare_physeq, method="NMDS", distance="bray")
+  
+#Convert ordination result into a data fram object
+my_plot2 <- (plot_ordination(rare_physeq, vst_pcoa,justDF = TRUE))
+
+just_positions <- my_plot2[,1:2]
+
+cluster_output <- kmeans(just_positions,3, iter.max = 10, nstart = 25)
+
+
+cluster_est <- cluster_output$cluster
+cluster_true_pre <- sample_info_tab$location
+
+cluster_names <- list()
+cluster_true <- cluster_true_pre
+for (x in 1:length(cluster_true_pre)) {
+  if (!(cluster_true_pre[x] %in% cluster_names)){
+    cluster_names <- append(cluster_names,cluster_true_pre[x])
+  }
+  cluster_true[x] <- as.integer(which(cluster_names == cluster_true_pre[x]))
+  cluster_true <- as.numeric(unlist(cluster_true))
+  }
+
+
+rand.index(cluster_est, cluster_true)
+
+```
+
+```{r}
+plot_ordination(rare_physeq, vst_pcoa, color="location", shape="type")
+```
+
+```{r}
+cluster_est <- cluster_output$cluster
+cluster_true_pre <- sample_info_tab$location
+
+cluster_names <- list()
+cluster_true <- cluster_true_pre
+for (x in 1:length(cluster_true_pre)) {
+  if (!(cluster_true_pre[x] %in% cluster_names)){
+    cluster_names <- append(cluster_names,cluster_true_pre[x])
+  }
+  cluster_true[x] <- as.integer(which(cluster_names == cluster_true_pre[x]))
+  cluster_true <- as.numeric(unlist(cluster_true))
+  }
+
+
+rand.index(cluster_est, cluster_true)
+```
+
+Rand Index calculation (extrinsic similarity)
+```{r}
+complete_ordination <- repeat_raref(count_data, sample_info_tab, repeats = 10, threshold = 1000, "sample_id", "location")
+
+
+just_positions <- complete_ordination[,1:2]
+cluster_output <- kmeans(just_positions,3, iter.max = 10, nstart = 25)
+
+
+cluster_est <- cluster_output$cluster
+cluster_true_pre <- complete_ordination$location
+
+cluster_names <- list()
+cluster_true <- cluster_true_pre
+for (x in 1:length(cluster_true_pre)) {
+  if (!(cluster_true_pre[x] %in% cluster_names)){
+    cluster_names <- append(cluster_names,cluster_true_pre[x])
+  }
+  cluster_true[x] <- as.integer(which(cluster_names == cluster_true_pre[x]))
+  cluster_true <- as.numeric(unlist(cluster_true))
+  }
+
+
+rand.index(cluster_est, cluster_true)
+FM_index(cluster_est, cluster_true)
+```
+
+
+
+```{r}
+#library(clusterSim)
+
+index_value <- function(repeats, threshold) {
+  complete_ordination <- repeat_raref(count_data, sample_info_tab, repeats = repeats, threshold = threshold, "sample_id", "location")
+  
+  
+  just_positions <- complete_ordination[,1:2]
+  
+  
+  #Create matrix with mean position for each sample
+  sum_test <- as.data.frame(rowsum(just_positions, complete_ordination$sample_id))
+  scale_factor <- length(t(just_positions))/length(t(sum_test))
+  sum_test <- as.data.frame(sum_test/scale_factor)
+  
+  
+  cluster_true_pre <- complete_ordination$location[1:(length(t(sum_test))/2)]
+  
+  cluster_names <- list()
+  cluster_true <- cluster_true_pre
+  # for (x in 1:length(cluster_true_pre)) {
+  #   if (!(cluster_true_pre[x] %in% cluster_names)){
+  #     cluster_names <- append(cluster_names,cluster_true_pre[x])
+  #   }
+  #   cluster_true[x] <- as.integer(which(cluster_names == cluster_true_pre[x]))
+  #   cluster_true <- as.numeric(unlist(cluster_true))
+  #   }
+  
+  for (x in 1:length(cluster_true_pre)) {
+    if (cluster_true_pre[x] == "VK5") {
+      cluster_true[x] <- 1
+    }else {
+      cluster_true[x] <-2
+    }
+  }
+  
+  cluster_true <- as.numeric(unlist(cluster_true))
+  return(index.G1(sum_test,cluster_true))
+  
+}
+```
+
+```{r}
+#repeat_list <- c(1, 10, 25, 50)
+threshhold <- c(10, 10, 10, 20, 20, 20, 30,30,30, 40,40,40, 50,50,50, 75,75,75, 100,100,100, 150,150,150, 200,200,200)
+#index_data <- matrix(ncol = 3, nrow = 0)
+colnames(index_data) <- c("Repeat Amount", "Threshold", "Index")
+
+
+for (x in threshhold) {
+  print(paste("Running with ",x," threshold"))
+  index <- index_value(20, x)
+  index_data <- rbind(index_data, c("20", x, index))
+}
+
+plot(x = index_data[,2], y = index_data[,3])
+
+colnames(index_data) <- c("Repeat_Amount", "Threshold", "Index")
+index_data <- as.data.frame(index_data)
+index_data$Threshold <- as.numeric(index_data$Threshold)
+index_data$Index <- as.numeric(index_data$Index)
+ 
+ggplot(index_data,aes(x=Threshold,y=Index,color=Repeat_Amount)) + geom_point() + labs(x = "Rarefaction Threshold", y ="Calinski-Harabasz pseudo F-statistic")
+```
+
+```{r}
+index_value_full <- function(repeats, threshold) {
+  complete_ordination <- repeat_raref(count_data, sample_info_tab, repeats = repeats, threshold = threshold, "NMDS", "location", shapeb = "type")
+  
+  
+  just_positions <- complete_ordination[,1:2]
+  cluster_true_pre <- complete_ordination$location
+  
+  cluster_names <- list()
+  cluster_true <- cluster_true_pre
+  # for (x in 1:length(cluster_true_pre)) {
+  #   if (!(cluster_true_pre[x] %in% cluster_names)){
+  #     cluster_names <- append(cluster_names,cluster_true_pre[x])
+  #   }
+  #   cluster_true[x] <- as.integer(which(cluster_names == cluster_true_pre[x]))
+  #   cluster_true <- as.numeric(unlist(cluster_true))
+  #   }
+  
+  for (x in 1:length(cluster_true_pre)) {
+    if (cluster_true_pre[x] == "VK5") {
+      cluster_true[x] <- 1
+    }else {
+      cluster_true[x] <-2
+    }
+  }
+  
+  cluster_true <- as.numeric(unlist(cluster_true))
+  return(index.G1(just_positions,cluster_true))
+  
+}
+```
+
+```{r}
+#repeat_list <- c(1, 10, 25, 50)
+threshhold <- c(10, 10, 10, 20, 20, 20, 30,30,30, 40,40,40, 50,50,50, 75,75,75, 100,100,100, 150,150,150, 200,200,200)
+#index_data <- matrix(ncol = 3, nrow = 0)
+colnames(index_data) <- c("Repeat Amount", "Threshold", "Index")
+
+
+for (x in threshhold) {
+  print(paste("Running with ",x," threshold"))
+  index <- index_value_full(20, x)
+  index_data <- rbind(index_data, c("20", x, index))
+}
+
+plot(x = index_data[,2], y = index_data[,3])
+
+colnames(index_data) <- c("Repeat_Amount", "Threshold", "Index")
+index_data <- as.data.frame(index_data)
+index_data$Threshold <- as.numeric(index_data$Threshold)
+index_data$Index <- as.numeric(index_data$Index)
+ 
+ggplot(index_data,aes(x=Threshold,y=Index,color=Repeat_Amount)) + geom_point() + labs(x = "Rarefaction Threshold", y ="Calinski-Harabasz pseudo F-statistic")
+```
+
+```{r}
+index_data_wor <- index_data[index_data$Repeat_Amount == "1",,]
+ggplot(index_data_wor,aes(x=Threshold,y=Index,color=Repeat_Amount)) + geom_point() + labs(x = "Rarefaction Threshold", y ="Calinski-Harabasz pseudo F-statistic")
+```
+
+
+```{r}
+index_data_wor <- index_data[index_data$Repeat_Amount == "1",,]
+index_data_r <- index_data[index_data$Repeat_Amount == "20",,]
+
+index_data_scaled <- rbind(index_data_wor,index_data_r)
+
+ggplot(index_data_scaled,aes(x=Threshold,y=Index,color=Repeat_Amount)) + geom_point() + labs(x = "Rarefaction Threshold", y ="Calinski-Harabasz pseudo F-statistic")
+```
+
+```{r}
+index_data_wor <- index_data[index_data$Repeat_Amount == "1",,]
+index_data_r <- index_data[index_data$Repeat_Amount == "20",,]
+
+index_data_scaled <- rbind(index_data_wor,index_data_r)
+
+
+
+index_data_wor$Index <- (index_data_wor$Index-min(index_data_wor$Index))/(max(index_data_wor$Index)-min(index_data_wor$Index))
+index_data_r$Index <- (index_data_r$Index-min(index_data_r$Index))/(max(index_data_r$Index)-min(index_data_r$Index))
+index_data_norm <- rbind(index_data_wor,index_data_r)
+
+ggplot(index_data_norm,aes(x=Threshold,y=Index,color=Repeat_Amount)) + geom_point() + labs(x = "Rarefaction Threshold", y ="Calinski-Harabasz pseudo F-statistic")
+
+
+```
+```{r}
+index <- index_value_full(20, 5)
+index_data_r <- rbind(index_data_r, c("20", 5, index))
+```
+
+```{r}
+index_data_r$Index <- as.numeric(index_data_r$Index)
+index_data_r$Threshold <- as.numeric(index_data_r$Threshold)
+ggplot(index_data_r,aes(x=Threshold,y=Index,color=Repeat_Amount)) + geom_point() + labs(x = "Rarefaction Threshold", y ="Calinski-Harabasz pseudo F-statistic")
 ```
 
